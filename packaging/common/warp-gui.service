@@ -1,0 +1,19 @@
+[Unit]
+Description=WARPture Tunnel Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/warpture-tunnel-agent
+Restart=on-failure
+RestartSec=5
+Environment=CONFIG_PATH=%h/.config/warp-gui/split-tunnel.json
+Environment=HTTP_ADDR=:8080
+Environment=WS_ADDR=:8081
+Environment=LOG_LEVEL=info
+StandardOutput=append:%h/.local/share/warp-gui/logs/tunnel-agent.log
+StandardError=append:%h/.local/share/warp-gui/logs/tunnel-agent-error.log
+
+[Install]
+WantedBy=default.target

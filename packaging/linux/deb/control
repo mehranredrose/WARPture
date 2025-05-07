@@ -1,0 +1,12 @@
+Package: warpture
+Version: 1.0.0
+Architecture: amd64
+Maintainer: mehranredrose <77771629+mehranredrose@users.noreply.github.com>
+Depends: libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils
+Section: net
+Priority: optional
+Homepage: https://github.com/mehranredrose/WARPture
+Description: Cloudflare WARP GUI Manager with App Split Tunneling
+ WARPture provides a system tray GUI for managing Cloudflare WARP
+ with per-application split tunneling support. Route individual apps
+ through or around WARP with a single toggle.

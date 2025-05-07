@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  tunnel-agent:
+    build:
+      context: ./services/tunnel-agent
+      dockerfile: Dockerfile
+    container_name: warpture-tunnel-agent
+    ports:
+      - "8080:8080"   # REST API
+      - "8081:8081"   # WebSocket
+    environment:
+      - WARP_CLI_PATH=/usr/bin/warp-cli
+      - LOG_LEVEL=info
+      - PROXY_HOST=127.0.0.1
+      - PROXY_PORT=40000
+      - CONFIG_PATH=/data/split-tunnel.json
+    volumes:
+      - warp-config:/data
+      - /var/run/warp:/var/run/warp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  process-monitor:
+    build:
+      context: ./services/process-monitor
+      dockerfile: Dockerfile
+    container_name: warpture-process-monitor
+    ports:
+      - "9090:9090"   # gRPC
+    environment:
+      - TUNNEL_AGENT_URL=http://tunnel-agent:8080
+      - SCAN_INTERVAL=2
+      - LOG_LEVEL=info
+    volumes:
+      - /proc:/host/proc:ro
+      - /usr/share/applications:/host/applications:ro
+    depends_on:
+      tunnel-agent:
+        condition: service_healthy
+    restart: unless-stopped
+    pid: host  # Required for /proc access on Linux
+
+  # Dev-only: mock warp-cli
+  warp-cli-mock:
+    image: python:3.11-slim
+    container_name: warpture-warp-mock
+    command: >
+      python -c "
+      import http.server, json, threading
+      class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+          self.send_response(200)
+          self.send_header('Content-Type','application/json')
+          self.end_headers()
+          self.wfile.write(json.dumps({'status':'Connected','account':'Team','mode':'proxy'}).encode())
+        def log_message(self, *a): pass
+      http.server.HTTPServer(('0.0.0.0',40001),H).serve_forever()
+      "
+    ports:
+      - "40001:40001"
+    profiles:
+      - dev
+
+volumes:
+  warp-config:
+    driver: local
+
+networks:
+  default:
+    name: warpture-net
