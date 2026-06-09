@@ -21,7 +21,7 @@
     "lint": "eslint src electron --ext .ts,.tsx,.js",
     "lint:fix": "eslint src electron --ext .ts,.tsx,.js --fix",
     "postinstall": "electron-builder install-app-deps",
-    "build:win": "./node_modules/.bin/vite build && ./node_modules/.bin/electron-builder --win"
+    "build:win": "node_modules\\.bin\\vite build && node_modules\\.bin\\electron-builder --win"
   },
   "dependencies": {
     "axios": "^1.6.0",
