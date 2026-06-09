@@ -1,6 +1,7 @@
 /**
  * WARPture – Electron Main Process
  * Handles: tray icon, system menu, window management, IPC bridge, auto-launch
+ * Services: tunnel-agent and process-monitor are launched as child processes
  */
 
 const {
@@ -17,6 +18,7 @@ const {
 } = require("electron");
 const path = require("path");
 const url = require("url");
+const { spawn } = require("child_process");
 const { TunnelAgentClient } = require("./tunnel-client");
 const { AutoLauncher } = require("./auto-launch");
 const { AppUpdater } = require("./updater");
@@ -32,7 +34,86 @@ let mainWindow = null;
 let tray = null;
 let tunnelClient = null;
 let autoLauncher = null;
-let warpStatus = "disconnected"; // connected | disconnected | connecting
+let warpStatus = "disconnected";
+let tunnelAgentProc = null;
+let processMonitorProc = null;
+
+// ─── Service Launcher ──────────────────────────────────────────────────────────
+function getResourcePath(name) {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, name);
+  }
+  return path.join(__dirname, "../resources", name);
+}
+
+function startServices() {
+  const agentBin = getResourcePath("tunnel-agent");
+  const monitorBin = getResourcePath("process-monitor");
+
+  try {
+    tunnelAgentProc = spawn(agentBin, [], {
+      env: {
+        ...process.env,
+        HTTP_ADDR: ":8080",
+        WS_ADDR: ":8081",
+        LOG_LEVEL: "info",
+      },
+      stdio: "ignore",
+      detached: false,
+    });
+
+    tunnelAgentProc.on("error", (err) => {
+      console.warn("[tunnel-agent] failed to start:", err.message);
+    });
+
+    tunnelAgentProc.on("exit", (code) => {
+      console.log("[tunnel-agent] exited with code:", code);
+    });
+
+    console.log("[main] tunnel-agent started, pid:", tunnelAgentProc.pid);
+  } catch (err) {
+    console.warn("[main] could not start tunnel-agent:", err.message);
+  }
+
+  // Give tunnel-agent 1.5s to boot before starting process-monitor
+  setTimeout(() => {
+    try {
+      processMonitorProc = spawn(monitorBin, [], {
+        env: {
+          ...process.env,
+          TUNNEL_AGENT_URL: "http://127.0.0.1:8080",
+          SCAN_INTERVAL: "2.5",
+          LOG_LEVEL: "info",
+        },
+        stdio: "ignore",
+        detached: false,
+      });
+
+      processMonitorProc.on("error", (err) => {
+        console.warn("[process-monitor] failed to start:", err.message);
+      });
+
+      processMonitorProc.on("exit", (code) => {
+        console.log("[process-monitor] exited with code:", code);
+      });
+
+      console.log("[main] process-monitor started, pid:", processMonitorProc.pid);
+    } catch (err) {
+      console.warn("[main] could not start process-monitor:", err.message);
+    }
+  }, 1500);
+}
+
+function stopServices() {
+  if (tunnelAgentProc) {
+    tunnelAgentProc.kill();
+    tunnelAgentProc = null;
+  }
+  if (processMonitorProc) {
+    processMonitorProc.kill();
+    processMonitorProc = null;
+  }
+}
 
 // ─── App Init ─────────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
@@ -56,11 +137,22 @@ app.whenReady().then(async () => {
     app.dock.hide();
   }
 
-  // Init services
+  // Start bundled services
+  startServices();
+
+  // Wait for tunnel-agent to be ready before connecting
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+
+  // Init tunnel client
   tunnelClient = new TunnelAgentClient(TUNNEL_AGENT_URL, WS_URL);
   autoLauncher = new AutoLauncher(app.getName());
 
-  await tunnelClient.init();
+  try {
+    await tunnelClient.init();
+  } catch (err) {
+    console.warn("[main] tunnel-agent not reachable, running in offline mode:", err.message);
+  }
+
   tunnelClient.on("statusChange", handleStatusChange);
   tunnelClient.on("error", handleAgentError);
 
@@ -144,9 +236,8 @@ function getTrayIcon(status) {
   };
   const iconPath = path.join(ASSETS, "tray", iconMap[status] || iconMap.disconnected);
   const img = nativeImage.createFromPath(iconPath);
-  // macOS: use template image for dark/light mode support
   if (process.platform === "darwin") {
-    img.setTemplateImage(false);
+    img.setTemplateImage(true);
   }
   return img.resize({ width: 18, height: 18 });
 }
@@ -199,7 +290,10 @@ function buildContextMenu() {
     },
     {
       label: "Quit WARPture",
-      role: "quit",
+      click: () => {
+        stopServices();
+        app.quit();
+      },
     },
   ]);
 }
@@ -347,6 +441,7 @@ function showNotification(title, body) {
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   tunnelClient?.destroy();
+  stopServices();
 });
 
 app.on("window-all-closed", () => {
