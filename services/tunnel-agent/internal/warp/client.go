@@ -25,12 +25,6 @@ const (
 	StatusConnecting   Status = "connecting"
 )
 
-type AccountInfo struct {
-	AccountType string `json:"accountType"`
-	Mode        string `json:"mode"`
-	DeviceName  string `json:"deviceName"`
-}
-
 type Stats struct {
 	BytesIn        int64  `json:"bytesIn"`
 	BytesOut       int64  `json:"bytesOut"`
@@ -40,7 +34,7 @@ type Stats struct {
 	Mode           string `json:"mode,omitempty"`
 }
 
-type StatusChangeFunc func(newStatus Status)
+type StatusChangeFunc func(Status)
 
 type Client struct {
 	cliPath   string
@@ -49,7 +43,6 @@ type Client struct {
 	mu        sync.RWMutex
 	status    Status
 	stats     Stats
-	account   AccountInfo
 	listeners []StatusChangeFunc
 	mockMode  bool
 }
@@ -86,13 +79,15 @@ func (c *Client) notifyListeners(s Status) {
 	}
 }
 
+// ── Core WARP commands ────────────────────────────────────────────────────────
+
 func (c *Client) Connect() error {
 	if c.mockMode {
 		return c.mockConnect()
 	}
-	out, err := c.run("connect")
+	_, err := c.run("connect")
 	if err != nil {
-		return fmt.Errorf("warp connect: %w (output: %s)", err, out)
+		return fmt.Errorf("warp connect: %w", err)
 	}
 	c.setStatus(StatusConnected)
 	return nil
@@ -102,14 +97,16 @@ func (c *Client) Disconnect() error {
 	if c.mockMode {
 		return c.mockDisconnect()
 	}
-	out, err := c.run("disconnect")
+	_, err := c.run("disconnect")
 	if err != nil {
-		return fmt.Errorf("warp disconnect: %w (output: %s)", err, out)
+		return fmt.Errorf("warp disconnect: %w", err)
 	}
 	c.setStatus(StatusDisconnected)
 	return nil
 }
 
+// GetStatus queries warp-cli status and returns the parsed result.
+// Real output looks like: "Status update: Connected" or "Status update: Disconnected"
 func (c *Client) GetStatus() (Status, error) {
 	if c.mockMode {
 		c.mu.RLock()
@@ -118,7 +115,7 @@ func (c *Client) GetStatus() (Status, error) {
 	}
 	out, err := c.run("status")
 	if err != nil {
-		return StatusDisconnected, fmt.Errorf("warp status: %w", err)
+		return StatusDisconnected, err
 	}
 	return parseStatus(out), nil
 }
@@ -129,57 +126,96 @@ func (c *Client) GetStats() Stats {
 	return c.stats
 }
 
-func (c *Client) SetMode(mode string) error {
-	if c.mockMode {
-		log.Infof("[warp:mock] set-mode %s", mode)
-		return nil
-	}
-	_, err := c.run("set-mode", mode)
-	return err
-}
-
-func (c *Client) SetProxy(enabled bool) error {
-	mode := "proxy"
-	if !enabled {
-		mode = "warp"
-	}
-	return c.SetMode(mode)
-}
-
-func (c *Client) AddSplitTunnelExclude(cidr string) error {
-	if c.mockMode {
-		log.Infof("[warp:mock] add-split-tunnel-exclude %s", cidr)
-		return nil
-	}
-	_, err := c.run("add-split-tunnel-exclude", cidr)
-	return err
-}
-
-func (c *Client) RemoveSplitTunnelExclude(cidr string) error {
-	if c.mockMode {
-		log.Infof("[warp:mock] remove-split-tunnel-exclude %s", cidr)
-		return nil
-	}
-	_, err := c.run("remove-split-tunnel-exclude", cidr)
-	return err
-}
-
-func (c *Client) GetAccount() (AccountInfo, error) {
-	if c.mockMode {
-		return AccountInfo{AccountType: "Team (simulated)", Mode: "proxy", DeviceName: "WARPture-Dev"}, nil
-	}
-	out, err := c.run("account")
-	if err != nil {
-		return AccountInfo{}, err
-	}
-	return parseAccount(out), nil
-}
-
+func (c *Client) IsMockMode() bool { return c.mockMode }
 func (c *Client) ProxyAddr() string {
 	return fmt.Sprintf("%s:%s", c.proxyHost, c.proxyPort)
 }
 
-func (c *Client) IsMockMode() bool { return c.mockMode }
+// ── Split tunnel IP commands (modern warp-cli API) ────────────────────────────
+
+// TunnelIPAdd adds an IP to the split tunnel config.
+// In exclude mode: this IP bypasses WARP.
+// In include mode: this IP goes through WARP.
+func (c *Client) TunnelIPAdd(ip string) error {
+	if c.mockMode {
+		log.Infof("[warp:mock] tunnel ip add %s", ip)
+		return nil
+	}
+	_, err := c.run("tunnel", "ip", "add", ip)
+	return err
+}
+
+// TunnelIPRemove removes an IP from the split tunnel config.
+func (c *Client) TunnelIPRemove(ip string) error {
+	if c.mockMode {
+		log.Infof("[warp:mock] tunnel ip remove %s", ip)
+		return nil
+	}
+	_, err := c.run("tunnel", "ip", "remove", ip)
+	return err
+}
+
+// TunnelIPShow returns the current split tunnel IP list.
+func (c *Client) TunnelIPShow() ([]string, error) {
+	if c.mockMode {
+		return []string{}, nil
+	}
+	out, err := c.run("tunnel", "ip", "show")
+	if err != nil {
+		return nil, err
+	}
+	return parseIPList(out), nil
+}
+
+// TunnelHostAdd adds a domain to the split tunnel config.
+func (c *Client) TunnelHostAdd(host string) error {
+	if c.mockMode {
+		log.Infof("[warp:mock] tunnel host add %s", host)
+		return nil
+	}
+	_, err := c.run("tunnel", "host", "add", host)
+	return err
+}
+
+// TunnelHostRemove removes a domain from the split tunnel config.
+func (c *Client) TunnelHostRemove(host string) error {
+	if c.mockMode {
+		log.Infof("[warp:mock] tunnel host remove %s", host)
+		return nil
+	}
+	_, err := c.run("tunnel", "host", "remove", host)
+	return err
+}
+
+// TunnelHostShow returns the current split tunnel host list.
+func (c *Client) TunnelHostShow() ([]string, error) {
+	if c.mockMode {
+		return []string{}, nil
+	}
+	out, err := c.run("tunnel", "host", "show")
+	if err != nil {
+		return nil, err
+	}
+	return parseHostList(out), nil
+}
+
+// GetSettings returns parsed warp-cli settings list output.
+func (c *Client) GetSettings() (map[string]string, error) {
+	if c.mockMode {
+		return map[string]string{
+			"Mode":              "WarpWithDnsOverHttps",
+			"Split Tunnel Mode": "Exclude",
+			"Always On":         "true",
+		}, nil
+	}
+	out, err := c.run("settings", "list")
+	if err != nil {
+		return nil, err
+	}
+	return parseSettings(out), nil
+}
+
+// ── Health Monitor ─────────────────────────────────────────────────────────────
 
 func (c *Client) HealthMonitor(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
@@ -216,6 +252,8 @@ func (c *Client) HealthMonitor(ctx context.Context) {
 	}
 }
 
+// ── Internals ─────────────────────────────────────────────────────────────────
+
 func (c *Client) run(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -251,60 +289,13 @@ func (c *Client) refreshStats() {
 		c.mu.Unlock()
 		return
 	}
-	out, err := c.run("stats")
+	out, err := c.run("tunnel", "stats")
 	if err != nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	parseStatsInto(out, &c.stats)
-}
-
-var statusRe = regexp.MustCompile(`(?i)status:\s*(\w+)`)
-
-func parseStatus(out string) Status {
-	m := statusRe.FindStringSubmatch(out)
-	if len(m) < 2 {
-		return StatusDisconnected
-	}
-	switch strings.ToLower(m[1]) {
-	case "connected":
-		return StatusConnected
-	case "connecting":
-		return StatusConnecting
-	default:
-		return StatusDisconnected
-	}
-}
-
-var latencyRe = regexp.MustCompile(`(?i)latency:\s*(\d+)\s*ms`)
-
-func parseStatsInto(out string, s *Stats) {
-	if m := latencyRe.FindStringSubmatch(out); len(m) >= 2 {
-		v, _ := strconv.Atoi(m[1])
-		s.LatencyMs = v
-	}
-}
-
-func parseAccount(out string) AccountInfo {
-	var info AccountInfo
-	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		k := strings.TrimSpace(strings.ToLower(parts[0]))
-		v := strings.TrimSpace(parts[1])
-		switch k {
-		case "account type":
-			info.AccountType = v
-		case "mode":
-			info.Mode = v
-		case "device name":
-			info.DeviceName = v
-		}
-	}
-	return info
 }
 
 func (c *Client) mockConnect() error {
@@ -315,16 +306,86 @@ func (c *Client) mockConnect() error {
 	c.mu.Lock()
 	c.stats.ConnectedSince = time.Now().UTC().Format(time.RFC3339)
 	c.stats.Account = "Team (simulated)"
-	c.stats.Mode = "proxy"
+	c.stats.Mode = "warp"
 	c.mu.Unlock()
 	return nil
 }
 
 func (c *Client) mockDisconnect() error {
-	log.Info("[warp:mock] disconnecting...")
 	time.Sleep(300 * time.Millisecond)
 	c.setStatus(StatusDisconnected)
 	return nil
+}
+
+// ── Parsers ───────────────────────────────────────────────────────────────────
+
+// parseStatus handles both old and new warp-cli output formats:
+// Old: "Status update: Connected"
+// New: "Connected" or just the word
+var statusRe = regexp.MustCompile(`(?i)(status update:|status:)?\s*(connected|disconnected|connecting|unable to connect)`)
+
+func parseStatus(out string) Status {
+	m := statusRe.FindStringSubmatch(strings.ToLower(out))
+	if len(m) < 3 {
+		// Fallback: check if the word appears anywhere
+		lower := strings.ToLower(out)
+		if strings.Contains(lower, "connected") && !strings.Contains(lower, "disconnected") {
+			return StatusConnected
+		}
+		if strings.Contains(lower, "connecting") {
+			return StatusConnecting
+		}
+		return StatusDisconnected
+	}
+	switch strings.TrimSpace(m[2]) {
+	case "connected":
+		return StatusConnected
+	case "connecting":
+		return StatusConnecting
+	default:
+		return StatusDisconnected
+	}
+}
+
+var latencyRe = regexp.MustCompile(`(?i)latency[:\s]+(\d+)\s*ms`)
+
+func parseStatsInto(out string, s *Stats) {
+	if m := latencyRe.FindStringSubmatch(out); len(m) >= 2 {
+		v, _ := strconv.Atoi(m[1])
+		s.LatencyMs = v
+	}
+}
+
+func parseIPList(out string) []string {
+	var ips []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			ips = append(ips, line)
+		}
+	}
+	return ips
+}
+
+func parseHostList(out string) []string {
+	return parseIPList(out) // same format
+}
+
+func parseSettings(out string) map[string]string {
+	result := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 {
+			k := strings.TrimSpace(parts[0])
+			v := strings.TrimSpace(parts[1])
+			// Strip "(derived)", "(network policy)", "(user set)" suffixes
+			if idx := strings.Index(v, "("); idx > 0 {
+				v = strings.TrimSpace(v[:idx])
+			}
+			result[k] = v
+		}
+	}
+	return result
 }
 
 func (s Status) MarshalJSON() ([]byte, error) {

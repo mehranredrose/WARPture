@@ -1,6 +1,6 @@
 {
   "name": "warpture-gui",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "WARPture – Cloudflare WARP GUI Manager with App Split Tunneling",
   "main": "electron/main.js",
   "homepage": "https://github.com/mehranredrose/WARPture",
